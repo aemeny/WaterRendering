@@ -1,33 +1,17 @@
-// Upgrade NOTE: commented out 'float3 _WorldSpaceCameraPos', a built-in variable
-
 Shader "Unlit/WaterShader"
 {
     Properties
     {
         _MainTex ("Texture", 2D) = "white" {}
 
-        [Space(20)][Header(Lighting Model Properties)][Space] _AmbientColour("Ambient Colour", color) = (0.1, 0.1, 0.1, 1)
-        _DiffuseColour("Diffuse Colour", color) = (0.7, 0.7, 0.7, 1)
-        _SpecularColour("Specular Colour", color) = (1, 1, 1, 1)
+        [Space(20)][Header(Lighting Model Properties)][Space] 
+        _AmbientColour("Ambient Colour", Color) = (0.1, 0.1, 0.1, 1)
+        _DiffuseColour("Diffuse Colour", Color) = (0.7, 0.7, 0.7, 1)
+        _SpecularColour("Specular Colour", Color) = (1, 1, 1, 1)
         _Shininess("Shininess", Range(1, 128)) = 32
 
-        [Space(20)][Header(Water Properties)][Space] _WaterColour("Water Colour", color) = (0, 0.329, 0.466, 1)
-
-        [Space(20)][Header(First Wave)][Space] _Amplitude1("Amplitude", Range(0, 3)) = 1
-        _WaveLength1("WaveLength", Range(0, 10)) = 2
-        _Speed1("Speed", Range(0, 10)) = 1
-
-        [Header(Second Wave)][Space] _Amplitude2("Amplitude", Range(0, 3)) = 1
-        _WaveLength2("WaveLength", Range(0, 10)) = 2
-        _Speed2("Speed", Range(0, 10)) = 1
-
-        [Header(Third Wave)][Space] _Amplitude3("Amplitude", Range(0, 3)) = 1
-        _WaveLength3("WaveLength", Range(0, 10)) = 2
-        _Speed3("Speed", Range(0, 10)) = 1
-
-        [Header(Fourth Wave)][Space] _Amplitude4("Amplitude", Range(0, 3)) = 1
-        _WaveLength4("WaveLength", Range(0, 10)) = 2
-        _Speed4("Speed", Range(0, 10)) = 1
+        [Space(20)][Header(Water Properties)][Space] 
+        _WaterColour("Water Colour", Color) = (0, 0.329, 0.466, 1)
     }
     SubShader
     {
@@ -42,8 +26,8 @@ Shader "Unlit/WaterShader"
 
             #include "UnityCG.cginc"
 
-            // Define PI constant
-            #define TWO_PI 6.28318530718 // 2 * PI to avoid recalculating it
+            // Define constants
+            #define TWO_PI 6.28318530718
 
             struct appdata
             {
@@ -56,34 +40,53 @@ Shader "Unlit/WaterShader"
                 float2 uv : TEXCOORD0;
                 float4 vertex : SV_POSITION;
                 float3 worldPos : TEXCOORD1;
-                float3 normal : TEXCOORD2; // Pass normal from vertex to fragment
-                float3 viewDir : TEXCOORD3; // camera view direction
+                float3 normal : TEXCOORD2;
+                float3 viewDir : TEXCOORD3;
             };
 
-            //Texture properties
+            // Texture properties
             sampler2D _MainTex;
             float4 _MainTex_ST;
 
             // Lighting properties
-            float4 _AmbientColour;
-            float4 _DiffuseColour;
-            float4 _SpecularColour;
-            float _Shininess;
+            uniform float4 _AmbientColour;
+            uniform float4 _DiffuseColour;
+            uniform float4 _SpecularColour;
+            uniform float _Shininess;
 
-            //Water properties
-            float4 _WaterColour;
-            float _Amplitude1, _Amplitude2, _Amplitude3, _Amplitude4;   
-            float _WaveLength1, _WaveLength2, _WaveLength3, _WaveLength4; 
-            float _Speed1, _Speed2, _Speed3, _Speed4;
+            // Water properties
+            uniform float4 _WaterColour;
 
+            // Wave parameters
+            uniform int _NumWaves;
+            uniform float4 _Waves[10];          // Amplitude, Wavelength, Speed, PhaseShift
+            uniform float4 _WaveDirections[10];  // Wave directions (x, y)
 
             // Function to compute the wave height
             float waveHeight(float x, float z)
             {
-                return _Amplitude1 * sin(TWO_PI / _WaveLength1 * x + _Time.y * _Speed1) +  // Wave moving along x-axis
-                       _Amplitude2 * sin(TWO_PI / _WaveLength2 * z + _Time.y * _Speed2) +  // Wave moving along z-axis
-                       _Amplitude3 * sin(TWO_PI / _WaveLength3 * (x + z) + _Time.y * _Speed3) + // Diagonal wave
-                       _Amplitude4 * sin(TWO_PI / _WaveLength4 * (x - z) + _Time.y * _Speed4);  // Opposite diagonal wave
+                float height = 0.0;
+                float t = _Time.y;
+
+                // Loop through each wave
+                for (int i = 0; i < _NumWaves; i++)
+                {
+                    float amplitude = _Waves[i].x;
+                    float wavelength = _Waves[i].y;
+                    float speed = _Waves[i].z;
+                    float phaseShift = _Waves[i].w;
+
+                    float2 direction = float2(_WaveDirections[i].x, _WaveDirections[i].y);
+
+                    // Precompute the angular frequency (omega)
+                    float omega = TWO_PI / wavelength;
+                    float phase = (x * direction.x + z * direction.y) * omega + t * speed + phaseShift;
+
+                    // Add the wave contribution to the total height
+                    height += amplitude * exp(sin(phase) - 1.0) * cos(phase);
+                }
+
+                return height;
             }
 
             // Vertex shader
@@ -129,30 +132,30 @@ Shader "Unlit/WaterShader"
                 float3 normal = normalize(i.normal);
                 float3 viewDir = normalize(i.viewDir);
 
-                // Light direction (overhead light for testing)
+                // Light direction
                 float3 lightDir = normalize(float3(-1, -1, 1)); 
 
                 // Half vector
                 float3 halfDir = normalize(lightDir + viewDir);
 
-                // Ambience
+                // Ambient light
                 float3 ambient = _AmbientColour.rgb;
 
                 // Lambertian diffuse
                 float NdotL = max(0, dot(normal, lightDir));
                 float3 diffuse = _DiffuseColour.rgb * NdotL;
 
-                // Specular
-                float NdotH  = max(0, dot(i.normal, halfDir));
+                // Specular light
+                float NdotH = max(0, dot(normal, halfDir));
                 float3 specular = _SpecularColour.rgb * pow(NdotH, _Shininess);
 
-                // Combine effects
-                float3 finalColour = (ambient + diffuse + specular) * _WaterColour;
+                // Combine lighting effects
+                float3 finalColour = (ambient + diffuse + specular) * _WaterColour.rgb;
 
                 // Sample the texture
                 fixed4 texColor = tex2D(_MainTex, i.uv);
 
-                // Final output
+                // Return final output color
                 return float4(finalColour, texColor.a);
             }
             ENDCG
