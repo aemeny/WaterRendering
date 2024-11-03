@@ -1,87 +1,84 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class MeshGen : MonoBehaviour
 {
-    public Material mat;
+    public Material waterMaterial;
+    public Shader waterShader;
+    [SerializeField] WaveController waveController;
 
-    public int x_cnt = 2;
-    public int z_cnt = 2;
-    public float x_scale = 1f;
-    public float z_scale = 1f;
+    private Mesh mesh;
+    private Vector3[] vertices;
+    private Vector3[] normals;
 
-    Vector3[] vert;
-    int[] tri;
-    //Vector2[] uvs;
+    [SerializeField] int planeLength = 10;
+    [SerializeField] int quadRes = 10;
 
-    void Start()//public void Generate()
+    private void Start()
     {
-        if (x_scale <= 0f)
-        {
-            x_scale = 1f;
-            Debug.Log("Xscale less than or equal to 0");
-        }
-        if (z_scale <= 0f)
-        {
-            z_scale = 1f;
-            Debug.Log("Zscale less than or equal to 0");
-        }
-
-        if (x_cnt >= 2 && z_cnt >= 2)
-        {
-            MakePlane();
-        }
+        CreateWaterPlane();
+        CreateMaterial();
     }
 
-    //make mesh without uv mapping...
-    void MeshMake(ref Vector3[] v, ref int[] t, Material m)
+    private void CreateWaterPlane()
     {
-        Mesh me = new Mesh();
-        if (!transform.GetComponent<MeshFilter>() || !transform.GetComponent<MeshRenderer>())
-        {
-            transform.gameObject.AddComponent<MeshFilter>();
-            transform.gameObject.AddComponent<MeshRenderer>();
-        }
-        transform.GetComponent<MeshFilter>().mesh = me;
-        me.vertices = v;
-        me.triangles = t;
-        me.RecalculateNormals();
-        transform.gameObject.GetComponent<MeshRenderer>().material = m;
-    }
+        GetComponent<MeshFilter>().mesh = mesh = new Mesh();
+        mesh.name = "Water";
+        mesh.indexFormat = IndexFormat.UInt32;
 
-    void MakePlane()
-    {
-        //define vertices...
-        vert = new Vector3[x_cnt * z_cnt];
-        for (int i = 0; i < z_cnt; i++)
+        float halfLength = planeLength * 0.5f;
+        int sideVertCount = planeLength * quadRes;
+
+        vertices = new Vector3[(sideVertCount + 1) * (sideVertCount + 1)];
+        Vector2[] uv = new Vector2[vertices.Length];
+        Vector4[] tangents = new Vector4[vertices.Length];
+        Vector4 tangent = new Vector4(1f, 0f, 0f, -1f);
+
+        for (int i = 0, x = 0; x <= sideVertCount; ++x)
         {
-            for (int j = 0; j < x_cnt; j++)
+            for (int z = 0; z <= sideVertCount; ++z, ++i)
             {
-                int idx = i * x_cnt + j;
-                vert[idx] = new Vector3(j * x_scale, 0f, i * z_scale);
+                vertices[i] = new Vector3(((float)x / sideVertCount * planeLength) - halfLength, 0, ((float)z / sideVertCount * planeLength) - halfLength);
+                uv[i] = new Vector2((float)x / sideVertCount, (float)z / sideVertCount);
+                tangents[i] = tangent;
             }
         }
 
-        //define triangles...
-        tri = new int[(x_cnt - 1) * (z_cnt - 1) * 6];
-        int id = 0;
-        for (int i = 0; i < z_cnt - 1; i++)
+        mesh.vertices = vertices;
+        mesh.uv = uv;
+        mesh.tangents = tangents;
+
+        int[] triangles = new int[sideVertCount * sideVertCount * 6];
+
+        for (int ti = 0, vi = 0, x = 0; x < sideVertCount; ++vi, ++x)
         {
-            for (int j = 0; j < x_cnt - 1; j++)
+            for (int z = 0; z < sideVertCount; ti += 6, ++vi, ++z)
             {
-                //first triangle..
-                tri[id] = i * x_cnt + j;
-                tri[id + 1] = tri[id] + x_cnt;
-                tri[id + 2] = tri[id + 1] + 1;
-
-                //second triangle..
-                tri[id + 3] = tri[id];
-                tri[id + 4] = tri[id + 2];
-                tri[id + 5] = tri[id] + 1;
-
-                id += 6;
+                triangles[ti] = vi;
+                triangles[ti + 1] = vi + 1;
+                triangles[ti + 2] = vi + sideVertCount + 2;
+                triangles[ti + 3] = vi;
+                triangles[ti + 4] = vi + sideVertCount + 2;
+                triangles[ti + 5] = vi + sideVertCount + 1;
             }
         }
 
-        MeshMake(ref vert, ref tri, mat);  //mesh without uv mappin..
+        mesh.triangles = triangles;
+        mesh.RecalculateNormals();
+        normals = mesh.normals;
+    }
+
+    void CreateMaterial()
+    {
+        if (waterShader == null) return;
+
+        waterMaterial = new Material(waterShader);
+
+        MeshRenderer renderer = GetComponent<MeshRenderer>();
+
+        renderer.material = waterMaterial;
+
+        waveController.waterMaterial = waterMaterial;
+        waveController.updateWaveShader();
     }
 }

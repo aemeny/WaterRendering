@@ -1,4 +1,4 @@
-Shader "Unlit/WaterShader"
+Shader "Custom/WaterShader"
 {
     Properties
     {
@@ -13,14 +13,17 @@ Shader "Unlit/WaterShader"
         [Space(20)][Header(Water Properties)][Space] 
         _WaterColour("Water Colour", Color) = (0, 0.329, 0.466, 1)
     }
+
     SubShader
     {
-        Tags { "RenderType"="Opaque" }
-        LOD 100
+        Tags { 
+            "LightMode" = "ForwardBase" 
+        }
 
         Pass
         {
             CGPROGRAM
+
             #pragma vertex vert
             #pragma fragment frag
 
@@ -44,9 +47,18 @@ Shader "Unlit/WaterShader"
                 float3 viewDir : TEXCOORD3;
             };
 
+            struct dummyV
+            {
+                float4 vertex : INTERNALTESSPOS;
+                float2 uv : TEXCOORD0;
+                float4 colour : COLOR;
+                float3 normal : NORMAL;
+            };
+
             // Texture properties
             sampler2D _MainTex;
             float4 _MainTex_ST;
+            samplerCUBE _ReflectionTex;
 
             // Lighting properties
             uniform float4 _AmbientColour;
@@ -59,34 +71,50 @@ Shader "Unlit/WaterShader"
 
             // Wave parameters
             uniform int _NumWaves;
-            uniform float4 _Waves[10];          // Amplitude, Wavelength, Speed, PhaseShift
-            uniform float4 _WaveDirections[10];  // Wave directions (x, y)
+            uniform float4 _Waves[64];          // Amplitude, Wavelength, Speed, PhaseShift
+            uniform float4 _WaveDirections[64];  // Wave directions (x, y)
 
-            // Function to compute the wave height
-            float waveHeight(float x, float z)
+            // Function to compute the final wave height
+            float waveHeight(float x, float z, out float2 derivative)
             {
                 float height = 0.0;
                 float t = _Time.y;
 
-                // Loop through each wave
-                for (int i = 0; i < _NumWaves; i++)
-                {
-                    float amplitude = _Waves[i].x;
-                    float wavelength = _Waves[i].y;
-                    float speed = _Waves[i].z;
-                    float phaseShift = _Waves[i].w;
+                float amplitudeMul = 0.8;
+                float frequency = 1.0;
 
-                    float2 direction = float2(_WaveDirections[i].x, _WaveDirections[i].y);
+               derivative = float2(0.0, 0.0);
+               float2 previousDerivative = float2(0.0, 0.0);
 
-                    // Precompute the angular frequency (omega)
-                    float omega = TWO_PI / wavelength;
-                    float phase = (x * direction.x + z * direction.y) * omega + t * speed + phaseShift;
+               // Loop through each wave
+               for (int i = 0; i < _NumWaves; i++)
+               {
+                   float speed = _Waves[i].z;
+                   float amplitude = _Waves[i].x * amplitudeMul;
+                   float waveLength = _Waves[i].y;
+                   float2 direction = float2(_WaveDirections[i].x, _WaveDirections[i].y);
 
-                    // Add the wave contribution to the total height
-                    height += amplitude * exp(sin(phase) - 1.0) * cos(phase);
-                }
+                   // Precompute the angular frequency and phase
+                   float omega = (2 / waveLength) * frequency;
+                   float phase = ((x + previousDerivative.x) * direction.x + (z + previousDerivative.y) * direction.y) * omega + t * speed;
+                   float exponent = exp(sin(phase) - 1.0);
 
-                return height;
+                   // Compute wave height using fBM
+                   height += amplitude * exponent;
+
+                   // Compute partial derivatives (with respect to x and z)
+                   float waveDerivative = omega * amplitude * exponent * cos(phase);
+
+                   derivative.x += (waveDerivative * direction.x);
+                   derivative.y += (waveDerivative * direction.y);
+
+                   // Decrease amplitude and increase frequency for the next wave
+                   amplitudeMul *= 0.82;
+                   frequency *= 1.18;
+                   previousDerivative = derivative;
+               }
+
+               return height;
             }
 
             // Vertex shader
@@ -95,23 +123,15 @@ Shader "Unlit/WaterShader"
                 v2f o;
 
                 // Apply wave displacement
-                float height = waveHeight(v.vertex.x, v.vertex.z);
+                float2 derivative;
+                float height = waveHeight(v.vertex.x, v.vertex.z, derivative);
                 v.vertex.y += height;
 
                 // Compute normal direction
-                float offset = 0.01;
-                float h_dx = waveHeight(v.vertex.x + offset, v.vertex.z);
-                float h_dz = waveHeight(v.vertex.x, v.vertex.z + offset);
-
-                float3 dx = float3(1, (h_dx - height) / offset, 0);
-                float3 dz = float3(0, (h_dz - height) / offset, 1);
-                float3 normal = normalize(cross(dx, dz));
+                o.normal = normalize(float3(-derivative.x, 1.0, -derivative.y));
 
                 // World position
                 o.worldPos = mul(unity_ObjectToWorld, v.vertex).xyz;
-
-                // Pass the normal
-                o.normal = normal;
 
                 // Compute view direction
                 o.viewDir = normalize(_WorldSpaceCameraPos - o.worldPos);
@@ -133,7 +153,7 @@ Shader "Unlit/WaterShader"
                 float3 viewDir = normalize(i.viewDir);
 
                 // Light direction
-                float3 lightDir = normalize(float3(-1, -1, 1)); 
+                float3 lightDir = normalize(float3(-0.6, 0.8, 0.2)); 
 
                 // Half vector
                 float3 halfDir = normalize(lightDir + viewDir);
@@ -152,10 +172,17 @@ Shader "Unlit/WaterShader"
                 // Combine lighting effects
                 float3 finalColour = (ambient + diffuse + specular) * _WaterColour.rgb;
 
+                // Fresnel
+                float3 reflectedDir = reflect(-viewDir, normal);
+                float4 reflectedColour = texCUBE(_ReflectionTex, reflectedDir);
+                float fresnel = pow(1.0 - max(0.0, dot(viewDir, normal)), 3.0);
+                finalColour = lerp(finalColour, reflectedColour.rgb, fresnel);
+
                 // Sample the texture
                 fixed4 texColor = tex2D(_MainTex, i.uv);
 
                 // Return final output color
+                //return float4(specular, texColor.a);
                 return float4(finalColour, texColor.a);
             }
             ENDCG
